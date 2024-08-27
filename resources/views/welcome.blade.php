@@ -15,6 +15,7 @@
     <body class="font-sans antialiased dark:bg-black dark:text-white/50">
         <form action="/export" method="POST">
             @csrf
+            <input type="text" name="year" placeholder="Input Year" required>
             <button type="submit">Export Attendance</button>
         </form>
     </body>
