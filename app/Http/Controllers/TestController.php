@@ -5,13 +5,14 @@ namespace App\Http\Controllers;
 use App\Models\Employee;
 use App\Models\TimeTracker;
 use Rap2hpoutre\FastExcel\FastExcel;
-use App\Jobs\FinalizeExport;
-use App\Jobs\ExportTimeTrackerChunk;
+use App\Jobs\AddMoreTimeTrackers;
+use App\Jobs\CreateTimeTrackersExportFile;
 
-use Illuminate\Http\Request;
 use Illuminate\Bus\Batch;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Storage;
 
 class TestController extends Controller
 {
@@ -26,33 +27,46 @@ class TestController extends Controller
      */
     public function export(Request $request)
     {
-        set_time_limit(12000);
-    	ini_set('memory_limit', '-1');
-
+        // set_time_limit(12000);
+    	// ini_set('memory_limit', '-1');
         $year = $request->input('year');
-        $batchSize = 5000;
-        $totalRecords = TimeTracker::whereYear('created_at', $year)->count();
-        $batches = [];
+        $chunkSize = 10000;
+        $timeTrackersCount = TimeTracker::whereYear('ttr_date', $year)->count();
+        $numberOfChunks = ceil($timeTrackersCount / $chunkSize);
+        $folder = now()->toDateString() . '-' . str_replace(':', '-', now()->toTimeString());
 
-        for ($i = 0; $i < $totalRecords; $i += $batchSize) {
-            $start = $i + 1;
-            $end = min($i + $batchSize, $totalRecords);
-            $batches[] = new ExportTimeTrackerChunk($start, $end, $year);
+        // dispatch(new CreateTimeTrackersExportFile($chunkSize, $folder, $year));
+
+        $batches = [
+            new CreateTimeTrackersExportFile($chunkSize, $folder, $year)
+        ];
+
+        if ($timeTrackersCount > $chunkSize) {
+            $numberOfChunks = $numberOfChunks - 1;
+            for ($numberOfChunks; $numberOfChunks > 0; $numberOfChunks--) {
+                $batches[] = new AddMoreTimeTrackers($numberOfChunks, $chunkSize, $folder, $year);
+            }
         }
 
         Bus::batch($batches)
-            ->then(function () use ($year) {
-                info('All chunk jobs completed successfully');
-                // Dispatch the finalize job after all chunks are processed
-                dispatch(new FinalizeExport($year));
+            ->name('Export TimeTrackers')
+            ->then(function (Batch $batch) use ($folder, $year) {
+                $path = "exports/{$folder}/time_trackers_{$year}.csv";
+                // upload file to s3
+                $file = storage_path("app/{$folder}/time_trackers.csv");
+                Storage::disk('local')->put($path, file_get_contents($file));
             })
             ->catch(function (Batch $batch, \Exception $e) {
                 info("Batch job failed: {$e->getMessage()}");
             })
-            ->finally(function () {
+            ->finally(function (Batch $batch) use ($folder) {
                 info('The batch has finished executing');
+                // delete local file (optional)
+                // Storage::disk('local')->deleteDirectory($folder);
             })
             ->dispatch();
+
+        return response()->json('Exporting TimeTrackers Data, Please Wait !!!!');
     }
 
 }
